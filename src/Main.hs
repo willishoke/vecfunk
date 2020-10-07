@@ -2,104 +2,105 @@
 
 module Main where
 
-import qualified Control.Category as C
-import qualified Control.Arrow as A
-import Algebra.Graph.AdjacencyMap
-import qualified Data.Vector as V
+import Prelude hiding (and, or)
+import Data.Tuple
+import Control.Arrow
+import Control.Monad
 import Control.Lens
+import qualified Data.Vector as V
 
 main :: IO ()
 main = do
   putStrLn "vecfunk"
 
-data Node = TRUE 
-          | FALSE
-          | NAND 
-          | SPLIT 
-          | JOIN 
-          | INVERTER
-  deriving (Show)
+data Bit = Zero | One deriving (Eq, Ord)
 
--- This forces overlay to duplicate identical nodes
+instance Show Bit where
+  show 0 = "0"
+  show 1 = "1"
 
-instance Eq Node where
-  (==) x y = False
+instance Num Bit where
+  (+) = curry or
+  (-) = undefined
+  (*) = curry and
+  negate = invert
+  abs = undefined
+  signum = undefined
+  fromInteger n = case n of
+    0 -> Zero
+    1 -> One
+    _ -> error "Invalid bit value"
 
-instance Ord Node where
-  compare x y = LT
+-- "split" from Haskell wiki, but pointfree
 
-data Comp = Comp
-  { _func :: V.Vector Bool -> V.Vector Bool
-  , _io's :: (Int, Int)
-  , _circ :: AdjacencyMap Node
-  }
+(-<) :: Arrow a => a b (b, b)
+(-<) = arr $ join (,)
 
-makeLenses ''Comp
+-- discard second element
 
-instance Show Comp where
-  show comp = show (_circ comp) <> " " <> show (_io's comp)
+(>-.) :: Arrow a => a (b, b') b
+(>-.)  = arr (^._1)
 
-instance Eq Comp where
-  (==) x y = _io's x == _io's y
+-- discard first element
 
-eval :: Comp -> V.Vector Bool -> V.Vector Bool
-eval c v = _func c v
+(>-..) :: Arrow a => a (b, b') b'
+(>-..) = arr (^._2)
 
-(-->) :: Comp -> Comp -> Comp
-(-->) c1 c2
-  | snd (_io's c1) /= fst (_io's c2) = error "arity mismatch"
-  | otherwise = Comp
-      { _func = _func c1 A.>>> _func c2
-      , _io's = (fst (_io's c1), snd (_io's c2))
-      , _circ = overlay (_circ c1) (_circ c2)
-      }
+-- swap two elements
 
--- Work in progress
-(>->) :: Comp -> Comp -> Comp -> Comp
-(>->) c1 c2 c3
-  | snd (_io's c1) /= fst (_io's c3) || snd (_io's c2) /= fst (_io's c3) = error "arity mismatch"
-  | otherwise = Comp
-      { _func = undefined -- (_func c1, _func c2) A.>>> _func c2
-      , _io's = (fst (_io's c1), snd (_io's c2))
-      , _circ = overlay (_circ c1) (_circ c2)
-      }
+(><) :: Arrow a => a (b, b') (b', b)
+(><) = (-<) >>> first (>-..) >>> second (>-.)
 
-nand :: Comp
-nand = Comp
-  { _func = \v -> pure $ not $ (v V.! 0) && (v V.! 1)
-  , _io's = (2,1)
-  , _circ = vertex NAND 
-  }
+-- swap middle two elements
 
-inv :: Comp
-inv = Comp
-  { _func = \v -> fmap not v
-  , _io's = (1,1)
-  , _circ = vertex INVERTER
-  }
+(>><<) :: Arrow a => a ((b, b'), (c, c')) ((b, c), (b', c'))
+(>><<) = (-<) 
+  >>> first (first (>-.) >>> second (>-.)) 
+  >>> second (first (>-..) >>> second (>-..))
 
-true :: Comp
-true = Comp
-  { _func = \v -> pure True
-  , _io's = (0,1)
-  , _circ = vertex TRUE 
-  } 
+-- change tuple grouping
 
-false :: Comp
-false = Comp
-  { _func = \v -> pure False
-  , _io's = (0,1)
-  , _circ = vertex FALSE 
-  } 
- 
-{--
-(-->) c1 c2 = case _func c1 of 
-  (OneTwo f) -> case _func c2 of
-    (OneTwo _) -> eror "arity mismatch"
-    (TwoOne g) -> Comp 
-      { _func = OneOne (g . f)
-      , _circ = connect (c1^.circ) (c2^.circ) }
+(>/<) :: Arrow a => a ((b, b'), c) (b, (b', c))
+(>/<) = second (-<)
+  >>> (>><<)
+  >>> first (>-.)
 
-(<--) :: Comp -> Comp -> Comp
-(<--) = flip (-->)
---} 
+nand :: (Bit, Bit) -> Bit
+nand (1, 1) = 0
+nand _      = 1
+
+invert :: Bit -> Bit
+invert = (-<) >>> nand
+
+and :: (Bit, Bit) -> Bit
+and = nand >>> invert 
+
+or :: (Bit, Bit) -> Bit
+or = first invert >>> second invert >>> nand 
+
+xor :: (Bit, Bit) -> Bit
+xor = (-<) 
+  >>> first nand 
+  >>> first (-<)
+  >>> (>><<)
+  >>> first nand
+  >>> second nand
+  >>> nand
+
+bitwise :: ((a, b) -> c) -> (V.Vector a, V.Vector b) -> V.Vector c 
+bitwise = uncurry . V.zipWith . curry
+
+mux :: ((Bit, Bit), Bit) -> Bit
+mux = second (-<)
+  >>> second (first invert)
+  >>> (>><<)
+  >>> first nand
+  >>> second nand
+  >>> nand
+
+halfAdder :: (Bit, Bit) -> (Bit, Bit)
+halfAdder = (&&&) xor and
+
+fullAdder :: ((Bit, Bit), Bit) -> (Bit, Bit)
+fullAdder = first halfAdder
+  >>> undefined
